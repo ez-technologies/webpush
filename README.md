@@ -51,6 +51,9 @@ Browser package, straight from GitHub (it builds itself on install):
 npm install "github:ez-technologies/webpush#v0.1.0"
 ```
 
+Installing from Git runs the package's `prepare` script, which compiles the TypeScript; newer npm versions list it
+under `install-scripts` the first time.
+
 ```ts
 import { subscribe, unsubscribe, pushStatus } from '@ez-technologies/webpush'
 import { installPushHandlers } from '@ez-technologies/webpush/sw' // in a bundled service worker
