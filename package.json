@@ -1,0 +1,35 @@
+{
+  "name": "@ez-technologies/webpush",
+  "version": "0.1.0",
+  "description": "Web Push for PWAs in the browser: subscribe, permission helpers and a service worker that shows the notification",
+  "type": "module",
+  "license": "MIT",
+  "repository": "github:ez-technologies/webpush",
+  "exports": {
+    ".": {
+      "types": "./client/dist/index.d.ts",
+      "default": "./client/dist/index.js"
+    },
+    "./sw": {
+      "types": "./client/dist/sw.d.ts",
+      "default": "./client/dist/sw.js"
+    },
+    "./push-sw.js": "./client/dist/push-sw.js"
+  },
+  "types": "./client/dist/index.d.ts",
+  "files": [
+    "client/dist",
+    "scripts/build-sw.mjs"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/build-sw.mjs",
+    "check": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "test": "npm run build && vitest run",
+    "prepare": "tsc -p tsconfig.json && node scripts/build-sw.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "~7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

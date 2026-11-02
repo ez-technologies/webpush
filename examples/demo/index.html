@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>webpush demo</title>
+  <style>
+    :root { --ink: #1d2433; --muted: #5b6577; --line: #e3e7ee; --accent: #2f5bea; --ok: #1f8a4c; --warn: #b26a00; --bad: #c0362c; --bg: #f5f7fb; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg); }
+    main { max-width: 640px; margin: 0 auto; padding: 28px 18px 40px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    p.lead { margin: 0 0 20px; color: var(--muted); }
+    .card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin-bottom: 14px; }
+    .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+    dt { color: var(--muted); }
+    dd { margin: 0; font-weight: 600; }
+    .pill { display: inline-block; padding: 1px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; background: #eef1f6; }
+    .pill.ok { background: #e3f5ea; color: var(--ok); }
+    .pill.warn { background: #fdf0dc; color: var(--warn); }
+    .pill.bad { background: #fbe4e2; color: var(--bad); }
+    .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+    button { font: inherit; font-weight: 600; border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 8px; padding: 9px 14px; cursor: pointer; }
+    button.secondary { background: #fff; color: var(--accent); }
+    button:disabled { opacity: .45; cursor: default; }
+    .note { margin: 10px 0 0; font-size: 14px; color: var(--muted); }
+    .note.ios { color: var(--warn); }
+    ol.log { list-style: none; margin: 0; padding: 0; }
+    ol.log li { border-top: 1px solid var(--line); padding: 8px 0; display: grid; grid-template-columns: 64px 1fr; gap: 10px; }
+    ol.log li:first-child { border-top: 0; }
+    ol.log li.empty { display: block; }
+    .time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; }
+    .what b { display: block; }
+    .what span { color: var(--muted); }
+    .empty { color: var(--muted); }
+    #countdown { font-weight: 600; color: var(--warn); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>webpush demo</h1>
+  <p class="lead">Subscribe this browser, then send it a push from the Go server.</p>
+
+  <section class="card" aria-labelledby="status-h">
+    <h2 id="status-h">This browser</h2>
+    <dl>
+      <dt>Push support</dt><dd id="support">checking</dd>
+      <dt>Permission</dt><dd id="permission">checking</dd>
+      <dt>Subscription</dt><dd id="subscription">checking</dd>
+    </dl>
+    <p class="note ios" id="ios-note" hidden>On iPhone and iPad, push works only after you add this site to the Home Screen (Share, then Add to Home Screen) and open it from there.</p>
+  </section>
+
+  <section class="card" aria-labelledby="actions-h">
+    <h2 id="actions-h">Try it</h2>
+    <div class="buttons">
+      <button id="subscribe">Turn on notifications</button>
+      <button id="unsubscribe" class="secondary">Turn off</button>
+      <button id="test" class="secondary">Send a test push</button>
+      <button id="burst" class="secondary">Send 4 chat messages</button>
+    </div>
+    <p class="note" id="result" aria-live="polite"></p>
+  </section>
+
+  <section class="card" aria-labelledby="log-h">
+    <h2 id="log-h">Pushes received</h2>
+    <ol class="log" id="log"><li class="empty">Nothing yet.</li></ol>
+  </section>
+</main>
+
+<script type="module">
+  import { subscribe, unsubscribe, pushStatus, permission, isPushSupported, needsHomeScreenInstall } from '/client/index.js'
+
+  const opts = { serviceWorkerUrl: '/push-sw.js?title=webpush%20demo' }
+  const $ = (id) => document.getElementById(id)
+  const pill = (text, kind) => `<span class="pill ${kind || ''}">${text}</span>`
+  const say = (text) => { $('result').textContent = text }
+
+  async function refresh() {
+    $('support').innerHTML = isPushSupported() ? pill('yes', 'ok') : pill('no', 'bad')
+    const perm = permission()
+    $('permission').innerHTML = pill(perm, perm === 'granted' ? 'ok' : perm === 'denied' ? 'bad' : 'warn')
+    $('ios-note').hidden = !needsHomeScreenInstall()
+    const status = await pushStatus(opts)
+    const subscribed = status === 'subscribed'
+    $('subscription').innerHTML = subscribed ? pill('subscribed', 'ok') : pill(status.replace(/-/g, ' '), status === 'not-subscribed' ? 'warn' : 'bad')
+    $('subscribe').disabled = subscribed || status === 'unsupported' || status === 'denied'
+    for (const id of ['unsubscribe', 'test', 'burst']) $(id).disabled = !subscribed
+  }
+
+  window.receivedPushes = []
+  function logPush(payload) {
+    window.receivedPushes.push(payload)
+    const list = $('log')
+    list.querySelector('.empty')?.remove()
+    const li = document.createElement('li')
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    li.innerHTML = `<span class="time">${time}</span><span class="what"><b></b><span></span></span>`
+    li.querySelector('b').textContent = payload.title || '(no title)'
+    li.querySelector('.what span').textContent = payload.body || ''
+    list.prepend(li)
+  }
+
+  navigator.serviceWorker?.addEventListener('message', (event) => {
+    if (event.data?.type === 'webpush:push') logPush(event.data.payload)
+  })
+
+  async function post(url) {
+    const res = await fetch(url, { method: 'POST' })
+    const body = await res.json()
+    if (!res.ok) throw new Error(body.error || res.status)
+    return body
+  }
+
+  $('subscribe').onclick = async () => {
+    try {
+      await subscribe(opts)
+      say('Subscribed. The server has this browser now.')
+    } catch (err) {
+      say(`Could not subscribe (${err.code || 'error'}): ${err.message}`)
+    }
+    refresh()
+  }
+  $('unsubscribe').onclick = async () => {
+    await unsubscribe(opts).catch((err) => say(err.message))
+    say('Unsubscribed.')
+    refresh()
+  }
+  $('test').onclick = async () => {
+    try {
+      const r = await post('/api/demo/test')
+      say(`Test push sent to ${r.sent} device(s).`)
+    } catch (err) { say(`Send failed: ${err.message}`) }
+  }
+  $('burst').onclick = async () => {
+    try {
+      const r = await post('/api/demo/burst')
+      const queued = r.outcomes.filter((o) => o === 'queued').length
+      let left = r.windowSeconds
+      say('')
+      $('result').innerHTML = `4 messages: ${r.outcomes.filter((o) => o === 'sent').length} sent now, ${queued} held. They arrive merged in <span id="countdown">${left}s</span>.`
+      const t = setInterval(() => {
+        left -= 1
+        const c = $('countdown')
+        if (!c) return clearInterval(t)
+        c.textContent = left > 0 ? `${left}s` : 'a moment'
+        if (left <= 0) clearInterval(t)
+      }, 1000)
+    } catch (err) { say(`Send failed: ${err.message}`) }
+  }
+
+  refresh()
+</script>
+</body>
+</html>
