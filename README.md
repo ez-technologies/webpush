@@ -185,6 +185,27 @@ res, err := sender.Send(ctx, userID, webpush.Message{
 or no subscription accepted it (`webpush_delivery_failed`). To send without waiting, call it in a goroutine with
 its own context.
 
+To word the message for each device, use `SendEach`. It asks for a message per subscription, so there is no query
+per language, and a message that is not valid fails only that subscription:
+
+```go
+res, err := sender.SendEach(ctx, userID, func(sub webpush.Subscription) webpush.Message {
+	return webpush.Message{Title: titleIn(sub.Lang), URL: "/builds/381"}
+})
+```
+
+### Move to this library from your own push code
+
+People already subscribed can stay subscribed. Keep the VAPID keys, the service worker's address and its scope, and
+implement `Store` over the table you have. Three things cover the time until every device has your new worker:
+
+- **Devices still on your old worker.** `Message.Extra` adds top-level fields to the payload, so the old worker finds
+  the names it reads: `Extra: map[string]any{"link": "/builds/381"}`.
+- **Notifications your old worker showed or left on their way.** `urlFields: ['url', 'link']` makes the new worker read
+  the old name as well.
+- **Keys the check refuses.** `NewSender` validates the keys, and your old code may not have. With
+  `WithInvalidKeysHandler(f)`, keys it refuses are reported to `f` and used as given, so sending goes on as before.
+
 ### Throttle and merge per group
 
 A chat that sends a push per message buzzes a phone ten times a minute. A `Throttler` sends **at most one push per
@@ -324,6 +345,8 @@ fails; the server forgets the endpoint at the next push anyway, when the push se
 | `Config.HTTPClient` | 15s timeout | Client for the push service requests. |
 | `WithErrorHandler(f)` | ignore | Told about each failed delivery and store errors while removing gone subscriptions. |
 | `WithDeliverer(d)` | real push services | Replace delivery, for tests. |
+| `WithInvalidKeysHandler(f)` | refuse | Keys that fail validation are reported to `f` and used as given. Missing keys are still refused. |
+| `Message.Extra` | none | Top-level payload fields of your own, for a service worker that reads other names. The standard fields win. |
 | `Message.TTL`, `.Urgency`, `.Topic` | from Config | Per-message delivery options. `Topic` lets the push service replace an undelivered message with the same topic. |
 | `ThrottleConfig.Window` | 2m | Shortest time between two pushes to the same user and group. |
 | `ThrottleConfig.Merge` | `CountMerge` | Turns the held messages into one ("3 new messages"). `MergeWith` builds one from a body function. |
@@ -343,7 +366,8 @@ fails; the server forgets the endpoint at the next push anyway, when the push se
 | `scope` | browser default | Scope of the service worker. |
 | `lang` | `navigator.language` | Stored with the subscription, to word messages per device. |
 | `fetchInit` | `credentials: 'same-origin'` | Merged into every request (headers, credentials). |
-| `readyTimeoutMs` | 10000 | How long to wait for the service worker to activate. |
+| `readyTimeoutMs` | 10000 | How long to wait for the service worker to register and activate. |
+| `checkResponse` | a `WebPushError` with code `server` | `(res) => ...` replaces the status check on saving and removing: throw your own error to show the server's refusal in your app's words. |
 
 ### Service worker (`installPushHandlers`, or `push-sw.js` query / `self.WEBPUSH_OPTIONS`)
 
@@ -355,6 +379,7 @@ fails; the server forgets the endpoint at the next push anyway, when the push se
 | `skipWhenFocused` | `skipWhenFocused=1` | false | No notification while the app is visible and focused (except `requireInteraction`). |
 | `notifyClients` | | true | Post `webpush:push` messages to open windows. |
 | `clickBehavior` | `click` | `navigate` | `navigate` an open window, or `message` it. |
+| `urlFields` | | `['url']` | Fields to read the URL from, in payloads and in notifications on screen, first one found. |
 
 The payload the worker reads is `webpush.Message` as JSON: `title`, `body`, `url`, `tag`, `icon`, `badge`,
 `requireInteraction`, `data`. Pushes from other senders work too; plain text becomes the body.

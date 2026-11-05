@@ -48,6 +48,13 @@ export interface PushHandlerOptions {
    * to route itself. With no window open, the URL opens in a new one.
    */
   clickBehavior?: 'navigate' | 'message'
+  /**
+   * Where to read the URL to open, first one found: in a push's payload, and in
+   * the data of a notification on screen. Add a name your older worker used, so
+   * what it showed and what is still on its way open the right page after an
+   * update. Default ['url'].
+   */
+  urlFields?: readonly string[]
 }
 
 // The few service worker APIs used here, typed locally so this file compiles
@@ -101,6 +108,15 @@ function absolute(sw: ServiceWorkerGlobalLike, url: string): string {
   }
 }
 
+function urlOf(source: unknown, opts: PushHandlerOptions): string | undefined {
+  const fields = (source ?? {}) as Record<string, unknown>
+  for (const name of opts.urlFields ?? ['url']) {
+    const value = fields[name]
+    if (typeof value === 'string' && value) return value
+  }
+  return undefined
+}
+
 async function windows(sw: ServiceWorkerGlobalLike): Promise<readonly WindowClientLike[]> {
   return sw.clients.matchAll({ type: 'window', includeUncontrolled: true })
 }
@@ -114,7 +130,7 @@ export async function handlePush(sw: ServiceWorkerGlobalLike, payload: PushPaylo
   const looking = open.some((w) => w.focused && w.visibilityState === 'visible')
   if (opts.skipWhenFocused && looking && !payload.requireInteraction) return
 
-  const url = absolute(sw, payload.url || opts.defaultUrl || '/')
+  const url = absolute(sw, urlOf(payload, opts) || opts.defaultUrl || '/')
   await sw.registration.showNotification(payload.title || opts.defaultTitle || 'New notification', {
     body: payload.body || '',
     tag: payload.tag || undefined,
@@ -153,7 +169,6 @@ export function installPushHandlers(sw: ServiceWorkerGlobalLike, opts: PushHandl
   })
   sw.addEventListener('notificationclick', (event: { notification: NotificationLike; waitUntil(p: Promise<unknown>): void }) => {
     event.notification.close()
-    const data = (event.notification.data ?? {}) as { url?: string }
-    event.waitUntil(openOrFocus(sw, data.url || opts.defaultUrl || '/', opts))
+    event.waitUntil(openOrFocus(sw, urlOf(event.notification.data, opts) || opts.defaultUrl || '/', opts))
   })
 }

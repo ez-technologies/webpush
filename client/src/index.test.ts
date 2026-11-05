@@ -25,6 +25,8 @@ interface Env {
   answer?: NotificationPermission
   noPush?: boolean
   noRegistration?: boolean
+  /** With noRegistration: the page's own worker becomes ready in the end. */
+  registersLater?: boolean
   existing?: { key?: Uint8Array }
   subscribeFails?: boolean
   fetchStatus?: number
@@ -53,7 +55,7 @@ function setup(env: Env = {}) {
   const serviceWorker = {
     getRegistration: vi.fn(async () => (env.noRegistration ? undefined : reg)),
     register: vi.fn(async () => reg),
-    ready: Promise.resolve(reg),
+    ready: env.noRegistration && !env.registersLater ? new Promise<never>(() => undefined) : Promise.resolve(reg),
   }
   const Notification = {
     permission: env.perm ?? 'default',
@@ -183,12 +185,32 @@ describe('subscribe', () => {
     expect(env.serviceWorker.register).toHaveBeenCalledWith('/push-sw.js', undefined)
   })
 
+  it('waits for a worker the page is registering by itself', async () => {
+    const env = setup({ noRegistration: true, registersLater: true })
+    const sub = await subscribe({ publicKey: KEY })
+    expect(sub.endpoint).toBe('https://push.example.com/new')
+    expect(env.serviceWorker.register).not.toHaveBeenCalled()
+  })
+
+  it('lets the app read the server answer itself', async () => {
+    const seen: number[] = []
+    const checkResponse = async (res: Response) => {
+      seen.push(res.status)
+      if (!res.ok) throw new Error('refused, in the words of the app')
+    }
+    setup({ fetchStatus: 400 })
+    await expect(subscribe({ publicKey: KEY, checkResponse })).rejects.toThrow('refused, in the words of the app')
+    setup()
+    await expect(subscribe({ publicKey: KEY, checkResponse })).resolves.toBeTruthy()
+    expect(seen).toEqual([400, 204])
+  })
+
   const failures: [string, Env, Parameters<typeof subscribe>[0], string][] = [
     ['unsupported', { noPush: true }, {}, 'unsupported'],
     ['iOS in Safari', { noPush: true, ua: IPHONE }, {}, 'needs-home-screen'],
     ['blocked', { answer: 'denied' }, {}, 'permission-denied'],
     ['prompt closed', { answer: 'default' }, {}, 'permission-dismissed'],
-    ['no service worker', { noRegistration: true }, {}, 'no-service-worker'],
+    ['no service worker', { noRegistration: true }, { readyTimeoutMs: 5 }, 'no-service-worker'],
     ['push service refuses', { subscribeFails: true }, {}, 'subscribe-failed'],
     ['server refuses', { fetchStatus: 401 }, { publicKey: KEY }, 'server'],
   ]
@@ -224,6 +246,16 @@ describe('unsubscribe and status', () => {
     const env = setup({ existing: {}, fetchStatus: 500 })
     const old = env.getSub()!
     await expect(unsubscribe()).rejects.toMatchObject({ code: 'server', status: 500 })
+    expect(old.unsubscribe).toHaveBeenCalled()
+  })
+
+  it('lets the app read the answer to the removal itself', async () => {
+    const env = setup({ existing: {}, fetchStatus: 403 })
+    const old = env.getSub()!
+    const checkResponse = () => {
+      throw new Error('refused, in the words of the app')
+    }
+    await expect(unsubscribe({ checkResponse })).rejects.toThrow('refused, in the words of the app')
     expect(old.unsubscribe).toHaveBeenCalled()
   })
 

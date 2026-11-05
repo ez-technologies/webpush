@@ -77,6 +77,36 @@ describe('handlePush', () => {
   })
 })
 
+describe('urlFields', () => {
+  it('reads the url from the fields it is told, first one found', async () => {
+    const { sw } = fakeSW()
+    const urlFields = ['url', 'link']
+    await handlePush(sw, { title: 'Old', link: '/from-link' } as never, { urlFields })
+    await handlePush(sw, { title: 'Both', url: '/from-url', link: '/from-link' } as never, { urlFields })
+    await handlePush(sw, { title: 'Default', link: '/from-link' } as never)
+    const urls = sw.registration.showNotification.mock.calls.map((c) => (c as unknown as [string, { data: { url: string } }])[1].data.url)
+    expect(urls).toEqual(['https://app.example.com/from-link', 'https://app.example.com/from-url', 'https://app.example.com/'])
+  })
+
+  it('opens a notification an older worker put on screen', async () => {
+    const { sw, listeners } = fakeSW()
+    installPushHandlers(sw, { urlFields: ['url', 'link'] })
+    const waits: Promise<unknown>[] = []
+    listeners.notificationclick({ notification: { close: vi.fn(), data: { link: '/from-link' } }, waitUntil: (p: Promise<unknown>) => waits.push(p) })
+    await Promise.all(waits)
+    expect(sw.clients.openWindow).toHaveBeenCalledWith('https://app.example.com/from-link')
+  })
+
+  it('without the option, such a notification opens the default', async () => {
+    const { sw, listeners } = fakeSW()
+    installPushHandlers(sw, { defaultUrl: '/home' })
+    const waits: Promise<unknown>[] = []
+    listeners.notificationclick({ notification: { close: vi.fn(), data: { link: '/from-link' } }, waitUntil: (p: Promise<unknown>) => waits.push(p) })
+    await Promise.all(waits)
+    expect(sw.clients.openWindow).toHaveBeenCalledWith('https://app.example.com/home')
+  })
+})
+
 describe('openOrFocus', () => {
   it('focuses the window already at the url', async () => {
     const other = win('https://app.example.com/')
