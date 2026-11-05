@@ -62,10 +62,11 @@ type Result struct {
 
 // Sender delivers messages to every subscription of a user.
 type Sender struct {
-	cfg       Config
-	store     Store
-	deliverer Deliverer
-	onError   func(error)
+	cfg           Config
+	store         Store
+	deliverer     Deliverer
+	onError       func(error)
+	onInvalidKeys func(error)
 }
 
 // Option changes a Sender.
@@ -78,11 +79,15 @@ func WithDeliverer(d Deliverer) Option { return func(s *Sender) { s.deliverer = 
 // and about store errors while removing gone subscriptions, for logging.
 func WithErrorHandler(f func(error)) Option { return func(s *Sender) { s.onError = f } }
 
-// NewSender checks the configuration and builds a Sender.
+// WithInvalidKeysHandler makes NewSender accept keys that VAPIDKeys.Validate
+// refuses: f is told why, and the keys are used exactly as given. It is for an
+// app that already sends with its keys, where stopping because of a check would
+// be worse than what the check prevents. Missing keys are still refused.
+func WithInvalidKeysHandler(f func(error)) Option { return func(s *Sender) { s.onInvalidKeys = f } }
+
+// NewSender checks the configuration and builds a Sender. It refuses keys that
+// fail VAPIDKeys.Validate, unless WithInvalidKeysHandler says otherwise.
 func NewSender(cfg Config, store Store, opts ...Option) (*Sender, error) {
-	if err := cfg.Keys.Validate(); err != nil {
-		return nil, err
-	}
 	if store == nil {
 		return nil, apperr.New(CodeNotConfigured, "webpush: a Store is required")
 	}
@@ -100,6 +105,12 @@ func NewSender(cfg Config, store Store, opts ...Option) (*Sender, error) {
 	for _, o := range opts {
 		o(s)
 	}
+	if err := cfg.Keys.Validate(); err != nil {
+		if s.onInvalidKeys == nil || apperr.CodeOf(err) != CodeInvalidKeys {
+			return nil, err
+		}
+		s.onInvalidKeys(err)
+	}
 	return s, nil
 }
 
@@ -115,13 +126,32 @@ func (s *Sender) Store() Store { return s.store }
 // store fails, or no subscription accepted it while at least one failed; in
 // the last case it has code CodeDeliveryFailed and Result.Failed has details.
 func (s *Sender) Send(ctx context.Context, userID string, msg Message) (Result, error) {
-	payload, err := msg.Payload()
+	d, err := s.delivery(msg)
 	if err != nil {
 		return Result{}, err
 	}
-	subs, err := s.store.ListByUser(ctx, userID)
+	return s.deliver(ctx, userID, func(sub Subscription) (Delivery, error) {
+		d.Subscription = sub
+		return d, nil
+	})
+}
+
+// SendEach is Send with a message per subscription, made by compose: each
+// device can get its own language. A message that is not valid counts as a
+// failure of that subscription alone.
+func (s *Sender) SendEach(ctx context.Context, userID string, compose func(Subscription) Message) (Result, error) {
+	return s.deliver(ctx, userID, func(sub Subscription) (Delivery, error) {
+		d, err := s.delivery(compose(sub))
+		d.Subscription = sub
+		return d, err
+	})
+}
+
+// delivery turns a message into what is delivered, with the Sender's defaults.
+func (s *Sender) delivery(msg Message) (Delivery, error) {
+	payload, err := msg.Payload()
 	if err != nil {
-		return Result{}, apperr.Wrap(CodeStore, err)
+		return Delivery{}, err
 	}
 	d := Delivery{Payload: payload, TTL: s.cfg.TTL, Urgency: s.cfg.Urgency, Topic: msg.Topic}
 	if msg.TTL > 0 {
@@ -130,9 +160,21 @@ func (s *Sender) Send(ctx context.Context, userID string, msg Message) (Result, 
 	if msg.Urgency != "" {
 		d.Urgency = msg.Urgency
 	}
+	return d, nil
+}
+
+func (s *Sender) deliver(ctx context.Context, userID string, prepare func(Subscription) (Delivery, error)) (Result, error) {
+	subs, err := s.store.ListByUser(ctx, userID)
+	if err != nil {
+		return Result{}, apperr.Wrap(CodeStore, err)
+	}
 	var res Result
 	for _, sub := range subs {
-		d.Subscription = sub
+		d, err := prepare(sub)
+		if err != nil {
+			res.Failed = append(res.Failed, fmt.Errorf("webpush: %s: %w", shortEndpoint(sub.Endpoint), err))
+			continue
+		}
 		status, err := s.deliverer.Deliver(ctx, d)
 		switch {
 		case err != nil:

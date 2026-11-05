@@ -44,6 +44,11 @@ type Message struct {
 	RequireInteraction bool `json:"requireInteraction,omitempty"`
 	// Data is passed through to the service worker untouched.
 	Data map[string]any `json:"data,omitempty"`
+	// Extra adds fields at the top level of the payload, for a service worker
+	// that reads names of its own, such as an older version of yours still
+	// installed on some devices. The fields above win over an Extra of the
+	// same name.
+	Extra map[string]any `json:"-"`
 
 	// TTL is how long the push service keeps the message for an offline
 	// device. Zero uses the Sender's default.
@@ -60,7 +65,7 @@ func (m Message) Payload() ([]byte, error) {
 	if strings.TrimSpace(m.Title) == "" {
 		return nil, apperr.New(CodeInvalidMessage, "webpush: message has no title")
 	}
-	b, err := json.Marshal(m)
+	b, err := m.encode()
 	if err != nil {
 		return nil, apperr.Wrap(CodeInvalidMessage, err)
 	}
@@ -70,4 +75,26 @@ func (m Message) Payload() ([]byte, error) {
 			With("size", len(b)).With("limit", MaxPayloadBytes)
 	}
 	return b, nil
+}
+
+func (m Message) encode() ([]byte, error) {
+	b, err := json.Marshal(m)
+	if err != nil || len(m.Extra) == 0 {
+		return b, err
+	}
+	fields := make(map[string]json.RawMessage, len(m.Extra))
+	if err := json.Unmarshal(b, &fields); err != nil {
+		return nil, err
+	}
+	for name, value := range m.Extra {
+		if _, taken := fields[name]; taken {
+			continue
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		fields[name] = raw
+	}
+	return json.Marshal(fields)
 }

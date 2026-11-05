@@ -54,6 +54,12 @@ export interface PushOptions {
   fetchInit?: RequestInit
   /** How long to wait for the service worker to become active. Default 10000 ms. */
   readyTimeoutMs?: number
+  /**
+   * Replaces the status check on the server's answer when saving or removing a
+   * subscription: throw your own error to show the server's refusal in your
+   * app's words. Default a WebPushError with code 'server' when it is not ok.
+   */
+  checkResponse?: (res: Response) => unknown
 }
 
 const defaults = {
@@ -139,7 +145,8 @@ export async function getRegistration(opts: PushOptions = {}, wait = false): Pro
   if (!reg && opts.serviceWorkerUrl && wait) {
     reg = await sw.register(opts.serviceWorkerUrl, opts.scope ? { scope: opts.scope } : undefined)
   }
-  if (!reg || !wait || reg.active) return reg
+  // Without a script to register, the page may be registering its own just now: give that time too.
+  if (!wait || reg?.active) return reg
   const timeout = opts.readyTimeoutMs ?? defaults.readyTimeoutMs
   const ready = await Promise.race([
     sw.ready,
@@ -232,7 +239,8 @@ export async function subscribe(opts: PushOptions = {}): Promise<PushSubscriptio
       body: JSON.stringify({ endpoint: json.endpoint, keys: json.keys, lang: opts.lang ?? navigator.language }),
     }),
   )
-  if (!res.ok) throw new WebPushError('server', `saving the subscription answered ${res.status}`, res.status)
+  if (opts.checkResponse) await opts.checkResponse(res)
+  else if (!res.ok) throw new WebPushError('server', `saving the subscription answered ${res.status}`, res.status)
   return sub
 }
 
@@ -254,6 +262,7 @@ export async function unsubscribe(opts: PushOptions = {}): Promise<boolean> {
   // Unsubscribe in the browser even when the server failed: the server forgets
   // the endpoint on its own at the next push (the push service answers 410).
   await sub.unsubscribe()
-  if (!res.ok) throw new WebPushError('server', `removing the subscription answered ${res.status}`, res.status)
+  if (opts.checkResponse) await opts.checkResponse(res)
+  else if (!res.ok) throw new WebPushError('server', `removing the subscription answered ${res.status}`, res.status)
   return true
 }

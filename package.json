@@ -1,6 +1,6 @@
 {
   "name": "@ez-technologies/webpush",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Web Push for PWAs in the browser: subscribe, permission helpers and a service worker that shows the notification",
   "type": "module",
   "license": "MIT",
